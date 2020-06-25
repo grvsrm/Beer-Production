@@ -1,0 +1,164 @@
+---
+title: "Robust Estimation of Beer Production Data using Bootstrap Resampling"
+author: "Gaurav Sharma"
+date: "24/06/2020"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+# Prerequisites
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+library(tidyverse)
+library(tidymodels)
+```
+
+# Lets load the data
+
+```{r}
+brewing_materials_raw <- read_csv("https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-03-31/brewing_materials.csv")
+brewing_materials_raw
+```
+
+# Lets explore the data a bit to understand
+```{r}
+brewing_materials_raw %>% group_by(type) %>% summarise(n = sum(month_current)) %>% arrange(desc(n))
+brewing_materials_raw %>% count(type, wt = month_current,sort = T) # Shorter way of doing the same thing
+
+```
+
+# More Exploration
+```{r}
+brewing_filtered <- brewing_materials_raw %>%
+    filter(
+        type %in% c("Malt and malt products",
+                    "Sugar and syrups",
+                    "Hops (dry)"),
+        year < 2016,
+        month != 12
+    ) %>%
+    mutate(date = lubridate::ymd(paste(year, "-", month, "-01")))
+
+brewing_filtered %>%
+    ggplot(aes(x = date, y = month_current, color = type)) +
+    geom_point(size = 2)
+
+brewing_materials <- brewing_filtered %>% 
+    select(date, type, month_current) %>% 
+    pivot_wider(names_from = type,
+                values_from = month_current) %>% 
+    janitor::clean_names()
+
+brewing_materials %>% 
+    ggplot(aes(malt_and_malt_products, sugar_and_syrups)) +
+    geom_point() +
+    geom_smooth(method = 'lm') +
+    theme_light()
+```
+
+# Lets fit a simpler linear model assuming that if there is no malt then there will be no requirement of sugar
+
+```{r}
+beer_fit <- lm(sugar_and_syrups ~ 0 + malt_and_malt_products, data = brewing_materials)
+
+summary(beer_fit)
+tidy(beer_fit)
+```
+
+# Lets create a bootstrap sample
+
+```{r}
+set.seed(123)
+beer_boot <- bootstraps(data = brewing_materials,
+                        times = 1e3,
+                        apparent = TRUE)
+```
+
+# Lets map some functions and check results
+```{r}
+beer_models <-
+    beer_boot %>%
+    mutate(model = map(
+        splits,
+        ~ lm(sugar_and_syrups ~ 0 + malt_and_malt_products,
+             data = .)
+    ))
+
+beer_coefs <- beer_models %>% 
+    mutate(coef_info = map(model, tidy)) %>% 
+    unnest(coef_info)
+```
+
+# Lets evaluatet the results
+
+```{r}
+beer_coefs %>%
+    ggplot(aes(estimate)) +
+    geom_histogram() +
+    geom_vline(
+        xintercept = mean(beer_coefs$estimate),
+        color = 'tomato',
+        size = 2
+    ) +
+    annotate(
+        geom = "text",
+        x = 0.2155,
+        y = 77,
+        label = "Mean of resampled estimates",
+        size = 5,
+        color = 'tomato'
+    ) +
+    annotate(
+        geom = "curve",
+        x = 0.208,
+        xend = 0.212,
+        y = 80,
+        yend = 77,
+        curvature = -0.3,
+        size = 1,
+        color = 'tomato'
+    )
+```
+
+# Lets see another summary for these models
+```{r}
+beer_models %>% 
+    mutate(glance = map(model, glance)) %>% 
+    unnest(glance)
+```
+
+# Lets check the fitted values
+```{r}
+beer_models %>% 
+    sample_n(200) %>% 
+    mutate(augment = map(model, augment)) %>% 
+    unnest(augment) %>% 
+    ggplot(aes(malt_and_malt_products, sugar_and_syrups)) +
+        geom_point(show.legend = F) +
+    geom_line(aes(y = .fitted, group = id, color = 'pink', alpha = 0.1),
+              show.legend = F)
+    
+```
+
+# Thats how we can use tidymodels workflow to see how predictions can be seen visually using resampled data (Bootstrapped)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
